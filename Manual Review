@@ -1,0 +1,118 @@
+import os
+import re
+import pandas as pd
+
+# Define suspicious patterns that might indicate hard-coded values
+HARD_CODED_PATTERNS = {
+    "API Key or Token": r"(api[_-]?key|token|secret)[\"'\s]*[:=][\"']?[A-Za-z0-9_\-]{16,}[\"']?",
+    "Password": r"(password|passwd|pwd)[\"'\s]*[:=][\"']?.+[\"']?",
+    "IP Address": r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+    "URL": r"https?://[^\s\"']+",
+}
+
+# Extensions to check
+SUPPORTED_EXTENSIONS = {'.py', '.js', '.java', '.ts', '.cpp', '.c', '.rb', '.php'}
+
+# Define patterns for improper error handling and weak SSL/TLS version usage
+ERROR_HANDLING_PATTERNS = {
+    "Improper Error Handling (Bare except)": r"except\s*:.*",
+    "Improper Error Handling (Broad except)": r"except\s+Exception\s*:.*",
+    "Improper Error Handling (Catch Exception)": r"\bcatch\s*\(\s*Exception\s*\)\s*{",  # For Java/C#
+    "Print for Error Handling": r"print\([^\)]+exception[^\)]+\)",
+    "Reraise without Info": r"raise\s+Exception\s*\(\s*\)",
+    "Improper try-except handling": r"try\s*:.*\n\s*except\s*:.*",
+    "Java - Catching All Exceptions": r"\bcatch\s*\(\s*Exception\s*\)\s*{",  # For Java catching all exceptions
+    "Java - Print Stack Trace": r"e\.printStackTrace\(\)",  # Detecting print stack trace in Java
+    "Java - Insecure Print for Error Handling": r"System\.out\.println\([^\)]+e\.getMessage\([^\)]+\)[^\)]+\)"  # Detecting System.out.println in Java
+}
+
+WEAK_SSL_TLS_PATTERNS = {
+    "Weak SSL/TLS Version (SSLv3)": r"SSLv3",
+    "Weak SSL/TLS Version (TLSv1)": r"TLSv1",
+    "Weak SSL/TLS Version (TLSv1.1)": r"TLSv1.1"
+}
+
+def is_comment(line, ext):
+    """Helper function to check if a line is a comment"""
+    if ext == '.java' or ext == '.js':
+        return line.strip().startswith("//")
+    elif ext == '.py' or ext == '.rb':
+        return line.strip().startswith("#")
+    return False
+
+def detect_hardcoded(directory):
+    results = []
+    seen_lines = set()  # To track already processed lines
+
+    for root, _, files in os.walk(directory):
+        for file in files:
+            _, ext = os.path.splitext(file)
+            if ext.lower() in SUPPORTED_EXTENSIONS:
+                full_path = os.path.join(root, file)
+                with open(full_path, 'r', errors='ignore') as f:
+                    for i, line in enumerate(f, start=1):
+                        line = line.strip()
+
+                        # Skip lines that are comments
+                        if is_comment(line, ext):
+                            continue
+
+                        # Check for hard-coded patterns and ensure the line isn't a duplicate
+                        for label, pattern in HARD_CODED_PATTERNS.items():
+                            if re.search(pattern, line) and line not in seen_lines:
+                                seen_lines.add(line)
+                                results.append({
+                                    'file': full_path,
+                                    'line_number': i,
+                                    'pattern_type': label,
+                                    'line': line
+                                })
+
+                        # Check for improper error handling patterns
+                        for label, pattern in ERROR_HANDLING_PATTERNS.items():
+                            if re.search(pattern, line) and line not in seen_lines:
+                                seen_lines.add(line)
+                                results.append({
+                                    'file': full_path,
+                                    'line_number': i,
+                                    'pattern_type': label,
+                                    'line': line
+                                })
+
+                        # Check for weak SSL/TLS version usage
+                        for label, pattern in WEAK_SSL_TLS_PATTERNS.items():
+                            if re.search(pattern, line) and line not in seen_lines:
+                                seen_lines.add(line)
+                                results.append({
+                                    'file': full_path,
+                                    'line_number': i,
+                                    'pattern_type': label,
+                                    'line': line
+                                })
+    return results
+
+def save_to_excel(findings, output_file):
+    # Create DataFrame
+    df = pd.DataFrame(findings)
+
+    # Save to Excel
+    df.to_excel(output_file, index=False)
+
+def main():
+    target_directory = input("Enter the path to the source code directory: ").strip()
+    output_file = input("Enter the desired output Excel file path (e.g., output.xlsx): ").strip()
+
+    # Ensure no extra quotes around the output file path
+    if output_file.startswith('"') and output_file.endswith('"'):
+        output_file = output_file[1:-1]
+
+    findings = detect_hardcoded(target_directory)
+
+    if findings:
+        save_to_excel(findings, output_file)
+        print(f"\nResults have been saved to {output_file}.")
+    else:
+        print("No hard-coded patterns found.")
+
+if __name__ == "__main__":
+    main()
